@@ -1,96 +1,49 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { getSession } from "@/lib/session";
-import { routesConfig, publicPaths, AppRole } from "@/config/accessConfig";
+// middleware.ts (at the root level, alongside `app`)
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
 
-type UserSession = {
-  user: {
-    email: string;
-    roles: AppRole[];
-  };
-};
+export function middleware(request: NextRequest) {
+  const token = request.cookies.get('access_token')?.value;
+  const { pathname } = request.nextUrl;
 
-export async function middleware(request: NextRequest) {
-  const { nextUrl, cookies } = request;
-  const pathname = nextUrl.pathname;
+  // Define protected paths
+  const protectedPaths = ['/page1', '/admin/page2']; // Add any other base protected paths
 
-  // Special handling for the /login route
-  if (pathname === "/login") {
-    const sessionToken = cookies.get("session")?.value;
-    if (sessionToken) {
-      const session = (await getSession()) as UserSession | null;
-      if (session?.user) {
-        console.log(`User ${session.user.email} already has a session, redirecting from login`);
-        return redirectToHome(request);
-      }
-    }
+  // Check if the current path starts with any of the protected paths
+  const isAccessingProtected = protectedPaths.some(path => pathname.startsWith(path));
+
+  // If accessing a protected path without a token, redirect to login
+  if (isAccessingProtected && !token) {
+    console.log(`Middleware: No token found for protected route ${pathname}. Redirecting to login.`);
+    const loginUrl = new URL('/login', request.url); // Construct absolute URL for redirection
+    return NextResponse.redirect(loginUrl);
   }
 
-  // Allow public paths and static assets (excluding the special case above)
-  if (
-    publicPaths.includes(pathname) ||
-    pathname.startsWith("/api") ||
-    pathname.startsWith("/_next") ||
-    pathname.match(/\.(png|jpg|jpeg|gif|ico)$/)
-  ) {
-    console.log("Inside public path check");
-    return NextResponse.next();
+  // If accessing login page *with* a token, redirect to a default protected page (e.g., page1)
+  if (pathname === '/login' && token) {
+     console.log('Middleware: User already logged in, redirecting from /login to /page1.');
+     const page1Url = new URL('/page1', request.url);
+     return NextResponse.redirect(page1Url);
   }
 
-  // Check for existing session for non-public routes
-  const sessionToken = cookies.get("session")?.value;
-  const session = sessionToken ? (await getSession()) as UserSession | null : null;
-
-  // Redirect to login if no valid session exists
-  if (!session?.user) {
-    console.log("No session found, redirecting to login");
-    return redirectToLogin(request);
-  }
-
-  // Normalize user roles
-  const userRoles = normalizeRoles(session.user.roles);
-
-  // Check route access permissions
-  const isAllowed = checkPathAccess(pathname, userRoles);
-  if (!isAllowed) {
-    console.warn(`Access denied for ${session.user.email} to ${pathname}`);
-    return redirectToAccessDenied(request);
-  }
-
+  // Allow the request to proceed
   return NextResponse.next();
 }
 
-// Helper function to check path access
-function checkPathAccess(path: string, userRoles: AppRole[]): boolean {
-  const routeConfig = routesConfig.find(rc => rc.path === path);
-  // Allow access if no specific config exists (public by default)
-  if (!routeConfig) return true;
-  return routeConfig.roles.some(role => userRoles.includes(role));
-}
-
-// Helper to normalize roles array
-function normalizeRoles(roles: unknown): AppRole[] {
-  if (!roles) return [];
-  if (Array.isArray(roles)) {
-    return roles.filter((r): r is AppRole => typeof r === "string" && isAppRole(r));
-  }
-  return typeof roles === "string" && isAppRole(roles) ? [roles] : [];
-}
-
-// Type guard for AppRole
-function isAppRole(role: string): role is AppRole {
-  return ["Admin", "User", "Ordertaker", "Manager"].includes(role);
-}
-
-// Redirection helpers
-const redirectToLogin = (request: NextRequest) =>
-  NextResponse.redirect(new URL("/login", request.url));
-
-const redirectToHome = (request: NextRequest) =>
-  NextResponse.redirect(new URL("/", request.url));
-
-const redirectToAccessDenied = (request: NextRequest) =>
-  NextResponse.redirect(new URL("/access-denied", request.url));
-
+// Configure the middleware to run only on specific paths
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    /*
+     * Match all request paths except for the ones starting with:
+     * - api (API routes)
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     */
+    '/((?!api|_next/static|_next/image|favicon.ico).*)',
+    // Apply specifically to login and protected paths if preferred:
+    // '/login',
+    // '/page1/:path*',
+    // '/admin/:path*',
+  ],
 };
